@@ -52,43 +52,81 @@ For a polished Cinnamon layout, use a matching light/dark Mint-Y control theme, 
 
 ## Windows 11-style desktop for Linux Mint Cinnamon
 
-Icons alone only change half the look. `win11-desktop-setup.sh` installs the icon
-theme and then configures the Cinnamon desktop itself — panel, window buttons,
-tiling, fonts, Nemo and desktop icons — so applications and the desktop behave
-like Windows 11.
+Icons alone only change half the look. `win11-desktop-setup.sh` gives all four
+selectors in **System Settings → Themes** a Windows 11 appearance, then configures
+the Cinnamon desktop itself — panel, window buttons, tiling, fonts, Nemo and
+desktop icons — so applications and the desktop behave like Windows 11.
 
 ```bash
 ./win11-desktop-setup.sh
 ```
 
-Run it **without `sudo`**: everything it touches is a per-user setting.
+Run it **without `sudo`**: everything it touches is per-user. On the first run it
+uses `git` and an internet connection to download pinned snapshots of the
+[Win11 GTK theme](https://github.com/yeyushengfan258/Win11-gtk-theme) and the
+[Windows 11 cursor theme](https://github.com/0free/windows-11-icons). Subsequent
+runs reuse the installed copies.
 
 ### What it changes
 
 | Area | Windows 11 behaviour applied |
 | --- | --- |
+| Desktop | Installs and applies `Win11-Light` / `Win11-Dark` to Cinnamon's panel, menu and dialogs |
+| Applications | Applies the matching `Win11-Light` / `Win11-Dark` GTK theme |
 | Icons | Installs and applies `Win11-blue` / `Win11-blue-dark` via `install.sh` |
-| Theme | Picks a Fluent/Windows-11 GTK theme if present, otherwise the closest Mint-Y variant, and matches light/dark |
-| Titlebars | Buttons on the right in `minimize, maximize, close` order |
+| Mouse Pointer | Installs and applies `Windows-11-cursors` |
+| Titlebars | Uses the matching Win11 window theme, with buttons on the right in `minimize, maximize, close` order |
 | Snapping | Edge tiling, Snap Layouts-style tile HUD, `Super` as snap modifier, new windows centred |
 | Task switcher | Alt+Tab with icons **and** window thumbnails |
 | Panel | Single 48 px bottom panel, no autohide, no hot corner, Win11-like icon sizes |
 | Keyboard | `Super` opens the menu, `Super+D` shows the desktop |
 | Clock | Time plus short date in the tray |
 | Files | Nemo defaults to list view, places sidebar, double click, informal dates |
-| Desktop | Home, Computer and Trash icons only, grid aligned |
+| Desktop icons | Home, Computer and Trash icons only, grid aligned |
 
 ### Common variations
 
 ```bash
 ./win11-desktop-setup.sh --theme purple --mode dark   # different accent, forced dark
 ./win11-desktop-setup.sh --panel bottom --panel-height 52
-./win11-desktop-setup.sh --no-icons                   # desktop settings only
+./win11-desktop-setup.sh --no-icons                   # keep the current icon theme
+./win11-desktop-setup.sh --no-companions              # stay offline/use installed themes
 ./win11-desktop-setup.sh --dry-run                    # show changes, change nothing
-./win11-desktop-setup.sh --gtk-theme Fluent-round-Dark --cursor-theme Windows-11-cursors
+./win11-desktop-setup.sh --gtk-theme MyTheme --cursor-theme MyCursors
 ```
 
 Full option list: `./win11-desktop-setup.sh --help`.
+
+### Companion downloads and offline use
+
+The companion themes are fetched directly from their upstream projects at
+immutable revisions, then installed under `${XDG_DATA_HOME:-~/.local/share}`:
+
+| Component | Pinned source | License note |
+| --- | --- | --- |
+| Desktop and Applications | [`yeyushengfan258/Win11-gtk-theme@49e30de`](https://github.com/yeyushengfan258/Win11-gtk-theme/tree/49e30de3503a49c4c873552b117f8e725393b527) | GPL-3.0 |
+| Mouse Pointer | [`0free/windows-11-icons@408e623`](https://github.com/0free/windows-11-icons/tree/408e6233586d9e79cca252cfc034caf14bf546b8) | Upstream does not declare a license |
+
+The cursor files are **not bundled or redistributed by this repository**. The
+setup script copies them from that pinned upstream snapshot at runtime. Review
+that project's terms before using them.
+
+If a required download cannot be fetched, setup stops with an error and leaves
+existing theme selections alone. For an offline run, use `--no-companions`; the
+script will use compatible themes already installed on the system. You can also
+provide exact installed names with `--gtk-theme` and `--cursor-theme`. To get all
+four exact defaults while offline, run once online first or install the pinned
+companions yourself.
+
+Cinnamon stores the resulting selectors as follows (the icon accent changes
+with `--theme`):
+
+| Themes field | Light mode | Dark mode |
+| --- | --- | --- |
+| Desktop | `Win11-Light` | `Win11-Dark` |
+| Applications | `Win11-Light` | `Win11-Dark` |
+| Icons | `Win11-blue` | `Win11-blue-dark` |
+| Mouse Pointer | `Windows-11-cursors` | `Windows-11-cursors` |
 
 ### Undo
 
@@ -111,10 +149,10 @@ Cinnamon stores applet options per instance, so these last steps are safest by h
    text label and use a categories-less layout.
 3. **Icon-only taskbar** — right-click *Grouped window list* → *Configure* → turn
    labels off and pin your favourite apps.
-4. **Optional extras** — the
-   [Fluent GTK theme](https://github.com/vinceliuice/Fluent-gtk-theme) and
-   [Win11 cursors](https://github.com/yeyushengfan258/Win11-cursors) get you the
-   rest of the way; re-run the script afterwards and it will pick them up.
+4. **Confirm the four themes** — open **System Settings → Themes → Advanced
+   settings**. Desktop and Applications should show `Win11-Light` or
+   `Win11-Dark`, Icons should show the selected `Win11` accent, and Mouse Pointer
+   should show `Windows 11`.
 
 ## Install options
 
