@@ -79,12 +79,48 @@ need_gsettings() {
     error "gsettings was not found. Run this script inside a Cinnamon session."
 }
 
+SCHEMA_LIST=""
+
+# Lists every installed schema once and caches the result.
+#
+# Note: no pipe into 'grep -q' here. With 'set -o pipefail' a 'grep -q' that
+# exits on the first match makes gsettings die with SIGPIPE (141), which is
+# then reported as a failure of the whole pipeline -- so an installed schema
+# such as org.cinnamon looked missing on systems with many schemas.
+load_schemas() {
+  [[ -n ${SCHEMA_LIST} ]] && return 0
+  SCHEMA_LIST=$(gsettings list-schemas 2>/dev/null || true)
+  [[ -n ${SCHEMA_LIST} ]]
+}
+
+# list_contains LINE TEXT
+list_contains() {
+  local needle=$1 line
+  while IFS= read -r line; do
+    [[ ${line} == "${needle}" ]] && return 0
+  done <<< "$2"
+  return 1
+}
+
 schema_exists() {
-  gsettings list-schemas 2>/dev/null | grep -Fxq "$1"
+  load_schemas || return 1
+  list_contains "$1" "${SCHEMA_LIST}"
 }
 
 key_exists() {
-  gsettings list-keys "$1" 2>/dev/null | grep -Fxq "$2"
+  local keys
+  keys=$(gsettings list-keys "$1" 2>/dev/null || true)
+  [[ -n ${keys} ]] || return 1
+  list_contains "$2" "${keys}"
+}
+
+# Last-resort check for a running/installed Cinnamon, used only when the
+# schema list could not be read at all.
+cinnamon_present() {
+  gsettings get org.cinnamon panels-enabled >/dev/null 2>&1 && return 0
+  [[ ${XDG_CURRENT_DESKTOP:-} == *[Cc]innamon* || ${DESKTOP_SESSION:-} == *cinnamon* ]] \
+    && return 0
+  command -v cinnamon >/dev/null 2>&1
 }
 
 theme_installed() {
@@ -247,9 +283,11 @@ apply_appearance() {
   fi
 
   if [[ -z ${font_name} ]]; then
-    if fc-list 2>/dev/null | grep -qi "segoe ui"; then
+    local fonts
+    fonts=$(fc-list 2>/dev/null || true)
+    if grep -qi "segoe ui" <<< "${fonts}"; then
       font_name="Segoe UI 10"
-    elif fc-list 2>/dev/null | grep -qi "selawik"; then
+    elif grep -qi "selawik" <<< "${fonts}"; then
       font_name="Selawik 10"
     else
       font_name="Ubuntu 10"
@@ -471,8 +509,20 @@ fi
 
 [[ ${EUID} -ne 0 ]] || error "Run this script as your normal user, without sudo."
 
-if ! schema_exists org.cinnamon; then
-  error "Cinnamon settings were not found. This script targets Linux Mint Cinnamon."
+if ! load_schemas; then
+  # gsettings gave us nothing at all (no dbus session, sandbox, ...).
+  if cinnamon_present; then
+    warn "Could not read the list of gsettings schemas; continuing anyway."
+  else
+    error "Cinnamon settings were not found. This script targets Linux Mint Cinnamon.
+Cinnamon is either not installed or this is not a Cinnamon session
+(XDG_CURRENT_DESKTOP='${XDG_CURRENT_DESKTOP:-unset}')."
+  fi
+elif ! schema_exists org.cinnamon; then
+  error "Cinnamon settings were not found. This script targets Linux Mint Cinnamon.
+'gsettings list-schemas' works but does not list org.cinnamon, so the
+Cinnamon schemas are not installed. On Linux Mint:
+  sudo apt install --reinstall cinnamon-common"
 fi
 
 [[ ${accent} =~ ^(default|black|blue|green|nord|purple|red)$ ]] || \

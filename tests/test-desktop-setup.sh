@@ -109,4 +109,69 @@ mkdir -p "${WORK_DIR}/db"
 assert_value org.cinnamon.panels-enabled "['1:0:top']"
 assert_value org.cinnamon.panels-height "['1:40']"
 
+# Regression: a long schema list must still be detected.
+# 'gsettings list-schemas | grep -q' makes gsettings die with SIGPIPE once
+# grep exits on the first match; under 'set -o pipefail' that used to be read
+# as "Cinnamon is not installed" on systems with many schemas installed.
+BIG_DIR=$(mktemp -d "${TMPDIR:-/tmp}/win11-bigschema.XXXXXX")
+mkdir -p "${BIG_DIR}/bin" "${BIG_DIR}/db"
+cat > "${BIG_DIR}/bin/gsettings" <<EOF
+#!/usr/bin/env bash
+DB="${BIG_DIR}/db"
+case \${1:-} in
+  list-schemas)
+    for i in \$(seq 1 4000); do printf 'org.example.filler%s\n' "\$i"; done
+    printf '%s\n' org.cinnamon org.cinnamon.desktop.interface \\
+      org.cinnamon.desktop.wm.preferences org.cinnamon.muffin \\
+      org.cinnamon.desktop.keybindings org.nemo.preferences org.nemo.desktop
+    for i in \$(seq 4001 8000); do printf 'org.example.filler%s\n' "\$i"; done
+    ;;
+  list-keys)
+    for i in \$(seq 1 500); do printf 'filler-key%s\n' "\$i"; done
+    printf '%s\n' gtk-theme color-scheme font-name titlebar-font button-layout \\
+      panels-enabled panels-height edge-tiling alttab-switcher-style overlay-key \\
+      default-folder-viewer computer-icon-visible clock-show-date
+    ;;
+  get)
+    key="\$2.\$3"
+    if [[ -f \${DB}/\${key} ]]; then cat "\${DB}/\${key}"; else printf "'previous'\n"; fi
+    ;;
+  set)
+    printf '%s\n' "\$4" > "\${DB}/\$2.\$3"
+    ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "${BIG_DIR}/bin/gsettings"
+
+if ! output=$(PATH="${BIG_DIR}/bin:${PATH}" HOME="${BIG_DIR}" \
+      "${SCRIPT}" --no-icons -y 2>&1); then
+  printf '%s\n' "${output}" >&2
+  rm -rf "${BIG_DIR}"
+  fail "Cinnamon was not detected when many schemas are installed."
+fi
+[[ -f ${BIG_DIR}/db/org.cinnamon.panels-enabled ]] || {
+  rm -rf "${BIG_DIR}"
+  fail "No settings were applied with a long schema list."
+}
+rm -rf "${BIG_DIR}"
+
+# A missing org.cinnamon schema is still reported as an error.
+NO_CINN_DIR=$(mktemp -d "${TMPDIR:-/tmp}/win11-nocinn.XXXXXX")
+mkdir -p "${NO_CINN_DIR}/bin"
+cat > "${NO_CINN_DIR}/bin/gsettings" <<'EOF'
+#!/usr/bin/env bash
+case ${1:-} in
+  list-schemas) printf '%s\n' org.gnome.desktop.interface org.gtk.Settings ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "${NO_CINN_DIR}/bin/gsettings"
+if PATH="${NO_CINN_DIR}/bin:/usr/bin:/bin" HOME="${NO_CINN_DIR}" \
+     "${SCRIPT}" --no-icons -y >/dev/null 2>&1; then
+  rm -rf "${NO_CINN_DIR}"
+  fail "The script ran even though org.cinnamon is missing."
+fi
+rm -rf "${NO_CINN_DIR}"
+
 printf 'All desktop setup tests passed.\n'
