@@ -50,6 +50,72 @@ If you prefer the graphical settings:
 
 For a polished Cinnamon layout, use a matching light/dark Mint-Y control theme, keep panel icons at their default symbolic size, and use the Cinnamon 6.6 menu settings to enlarge application icons slightly (24–28 px) and hide descriptions for a cleaner launcher.
 
+## Windows 11-style desktop for Linux Mint Cinnamon
+
+Icons alone only change half the look. `win11-desktop-setup.sh` installs the icon
+theme and then configures the Cinnamon desktop itself — panel, window buttons,
+tiling, fonts, Nemo and desktop icons — so applications and the desktop behave
+like Windows 11.
+
+```bash
+./win11-desktop-setup.sh
+```
+
+Run it **without `sudo`**: everything it touches is a per-user setting.
+
+### What it changes
+
+| Area | Windows 11 behaviour applied |
+| --- | --- |
+| Icons | Installs and applies `Win11-blue` / `Win11-blue-dark` via `install.sh` |
+| Theme | Picks a Fluent/Windows-11 GTK theme if present, otherwise the closest Mint-Y variant, and matches light/dark |
+| Titlebars | Buttons on the right in `minimize, maximize, close` order |
+| Snapping | Edge tiling, Snap Layouts-style tile HUD, `Super` as snap modifier, new windows centred |
+| Task switcher | Alt+Tab with icons **and** window thumbnails |
+| Panel | Single 48 px bottom panel, no autohide, no hot corner, Win11-like icon sizes |
+| Keyboard | `Super` opens the menu, `Super+D` shows the desktop |
+| Clock | Time plus short date in the tray |
+| Files | Nemo defaults to list view, places sidebar, double click, informal dates |
+| Desktop | Home, Computer and Trash icons only, grid aligned |
+
+### Common variations
+
+```bash
+./win11-desktop-setup.sh --theme purple --mode dark   # different accent, forced dark
+./win11-desktop-setup.sh --panel bottom --panel-height 52
+./win11-desktop-setup.sh --no-icons                   # desktop settings only
+./win11-desktop-setup.sh --dry-run                    # show changes, change nothing
+./win11-desktop-setup.sh --gtk-theme Fluent-round-Dark --cursor-theme Windows-11-cursors
+```
+
+Full option list: `./win11-desktop-setup.sh --help`.
+
+### Undo
+
+Every run writes the previous values to a restore script in
+`~/.local/state/win11-desktop-setup/`:
+
+```bash
+./win11-desktop-setup.sh --restore                    # undo the most recent run
+./win11-desktop-setup.sh --restore ~/.local/state/win11-desktop-setup/restore-20260814-101500.sh
+```
+
+### Finishing touches (GUI only)
+
+Cinnamon stores applet options per instance, so these last steps are safest by hand:
+
+1. **Centred taskbar** — right-click the panel → *Panel* → *Panel edit mode*, drag
+   *Menu* and *Grouped window list* into the **center** zone, keep the systray and
+   clock on the right, then leave edit mode.
+2. **Start button** — right-click the menu applet → *Configure*, clear the "Menu"
+   text label and use a categories-less layout.
+3. **Icon-only taskbar** — right-click *Grouped window list* → *Configure* → turn
+   labels off and pin your favourite apps.
+4. **Optional extras** — the
+   [Fluent GTK theme](https://github.com/vinceliuice/Fluent-gtk-theme) and
+   [Win11 cursors](https://github.com/yeyushengfan258/Win11-cursors) get you the
+   rest of the way; re-run the script afterwards and it will pick them up.
+
 ## Install options
 
 ```text
