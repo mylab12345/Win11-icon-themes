@@ -1,6 +1,6 @@
 [Icon Theme]
 Name=Win11
-Comment=MacOSX style icon theme for linux.
+Comment=Windows 11 Fluent-style icon theme for Linux desktops.
 Inherits=hicolor,breeze
 Example=folder
 
