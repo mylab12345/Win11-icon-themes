@@ -2,7 +2,8 @@
 
 # win11-desktop-setup.sh
 # Give Linux Mint (Cinnamon) a Windows 11-like look:
-#   * installs and applies the Win11 icon theme from this repository
+#   * installs and applies coordinated Desktop, Applications, Icons and
+#     Mouse Pointer themes
 #   * configures panel, window buttons, fonts, effects, Nemo and desktop
 #     settings so applications and the desktop feel like Windows 11
 #
@@ -14,6 +15,14 @@ set -euo pipefail
 
 SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${XDG_STATE_HOME:-${HOME}/.local/state}/win11-desktop-setup"
+DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}"
+
+# Companion projects are fetched at immutable revisions. Environment overrides
+# exist for downstream packaging and for the offline test suite.
+WIN11_GTK_REPOSITORY=${WIN11_GTK_REPOSITORY:-https://github.com/yeyushengfan258/Win11-gtk-theme.git}
+WIN11_GTK_REF=${WIN11_GTK_REF:-49e30de3503a49c4c873552b117f8e725393b527}
+WIN11_CURSOR_REPOSITORY=${WIN11_CURSOR_REPOSITORY:-https://github.com/0free/windows-11-icons.git}
+WIN11_CURSOR_REF=${WIN11_CURSOR_REF:-408e6233586d9e79cca252cfc034caf14bf546b8}
 
 accent=blue
 mode=auto
@@ -23,13 +32,22 @@ gtk_theme=""
 cursor_theme=""
 font_name=""
 skip_icons=false
+install_companions=true
 dry_run=false
 restore_file=""
 do_restore=false
 assume_yes=false
 
 RESTORE_SCRIPT=""
+COMPANION_WORK_DIR=""
 CHANGES=0
+
+cleanup() {
+  if [[ -n ${COMPANION_WORK_DIR} && -d ${COMPANION_WORK_DIR} ]]; then
+    rm -rf -- "${COMPANION_WORK_DIR}"
+  fi
+}
+trap cleanup EXIT
 
 usage() {
   cat <<EOF
@@ -47,7 +65,8 @@ Options:
       --gtk-theme NAME    Override the GTK/Cinnamon theme
       --cursor-theme NAME Override the cursor theme
       --font NAME         Override the interface font (e.g. "Ubuntu 10")
-      --no-icons          Do not run install.sh, only change desktop settings
+      --no-icons          Do not install or change the icon theme
+      --no-companions     Do not download Win11 application/desktop/cursor themes
   -n, --dry-run           Print what would change, change nothing
   -y, --yes               Do not ask for confirmation
       --restore [FILE]    Undo a previous run (default: the most recent one)
@@ -125,7 +144,7 @@ cinnamon_present() {
 
 theme_installed() {
   local kind=$1 name=$2 dir
-  for dir in "${HOME}/.local/share/${kind}" "${HOME}/.${kind}" \
+  for dir in "${DATA_DIR}/${kind}" "${HOME}/.${kind}" \
              /usr/share/"${kind}" /usr/local/share/"${kind}"; do
     [[ -d ${dir}/${name} ]] && return 0
   done
@@ -142,6 +161,117 @@ first_available_theme() {
     fi
   done
   return 1
+}
+
+ensure_companion_work_dir() {
+  if [[ -z ${COMPANION_WORK_DIR} ]]; then
+    COMPANION_WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/win11-desktop-setup.XXXXXX") || \
+      error "Could not create a temporary directory for companion themes."
+  fi
+}
+
+# Fetch a reviewed, immutable repository snapshot. Pinning these downloads keeps
+# a normal setup reproducible instead of executing whatever happens to be at a
+# project's branch tip that day.
+fetch_companion_repo() {
+  local label=$1 repository=$2 ref=$3 destination=$4 actual
+
+  command -v git >/dev/null 2>&1 || \
+    error "git is required to download the ${label}. Install git, or use --no-companions."
+
+  rm -rf -- "${destination}"
+  mkdir -p "${destination}"
+  git -C "${destination}" init -q
+  if ! git -C "${destination}" fetch -q --depth 1 "${repository}" "${ref}"; then
+    error "Could not download the ${label} from ${repository}.
+Check the internet connection, then retry; or use --no-companions to keep installed themes."
+  fi
+  git -C "${destination}" checkout -q --detach FETCH_HEAD
+
+  actual=$(git -C "${destination}" rev-parse HEAD)
+  [[ ${actual} == "${ref}" ]] || \
+    error "The downloaded ${label} revision was ${actual}, expected ${ref}."
+}
+
+gtk_companions_installed() {
+  [[ -f ${DATA_DIR}/themes/Win11-Light/gtk-3.0/gtk.css && \
+     -f ${DATA_DIR}/themes/Win11-Light/cinnamon/cinnamon.css && \
+     -f ${DATA_DIR}/themes/Win11-Dark/gtk-3.0/gtk.css && \
+     -f ${DATA_DIR}/themes/Win11-Dark/cinnamon/cinnamon.css ]]
+}
+
+cursor_companion_installed() {
+  [[ -f ${DATA_DIR}/icons/Windows-11-cursors/cursors/default || \
+     -f ${DATA_DIR}/icons/Windows-11-cursors/cursors/left_ptr ]]
+}
+
+install_gtk_companions() {
+  local checkout
+  ensure_companion_work_dir
+  checkout="${COMPANION_WORK_DIR}/gtk"
+
+  info "Downloading the Windows 11 application and desktop themes..."
+  fetch_companion_repo "Win11 GTK theme" \
+    "${WIN11_GTK_REPOSITORY}" "${WIN11_GTK_REF}" "${checkout}"
+  [[ -f ${checkout}/install.sh ]] || \
+    error "The Win11 GTK theme download does not contain install.sh."
+
+  mkdir -p "${DATA_DIR}/themes"
+  # No tweak compilation is needed: the upstream project ships ready-made CSS.
+  # Install both variants so a later light/dark switch does not need a download.
+  if ! bash "${checkout}/install.sh" \
+      --dest "${DATA_DIR}/themes" --color light dark --size standard; then
+    error "The Win11 application and desktop themes could not be installed."
+  fi
+  gtk_companions_installed || \
+    error "The Win11 GTK installer completed but Win11-Light/Win11-Dark are incomplete."
+}
+
+install_cursor_companion() {
+  local checkout source target temporary
+  ensure_companion_work_dir
+  checkout="${COMPANION_WORK_DIR}/cursor"
+  source="${checkout}/Windows-11-cursors"
+  target="${DATA_DIR}/icons/Windows-11-cursors"
+  temporary="${DATA_DIR}/icons/.Windows-11-cursors.tmp.$$"
+
+  info "Downloading the Windows 11 mouse-pointer theme..."
+  fetch_companion_repo "Windows 11 cursor theme" \
+    "${WIN11_CURSOR_REPOSITORY}" "${WIN11_CURSOR_REF}" "${checkout}"
+  [[ -f ${source}/index.theme && -d ${source}/cursors ]] || \
+    error "The Windows 11 cursor download is incomplete."
+
+  mkdir -p "${DATA_DIR}/icons"
+  rm -rf -- "${temporary}"
+  cp -a "${source}" "${temporary}"
+  rm -rf -- "${target}"
+  mv "${temporary}" "${target}"
+  cursor_companion_installed || \
+    error "The Windows 11 cursor theme could not be installed."
+}
+
+# Ensure Cinnamon has real Windows 11 choices for Applications, Desktop and
+# Mouse Pointer. Icons are supplied by this repository in install_icons().
+install_companion_themes() {
+  local target_gtk
+  [[ ${mode} == dark ]] && target_gtk=Win11-Dark || target_gtk=Win11-Light
+
+  if [[ ${dry_run} == true ]]; then
+    [[ -n ${gtk_theme} ]] || gtk_theme=${target_gtk}
+    [[ -n ${cursor_theme} ]] || cursor_theme=Windows-11-cursors
+    info "  would ensure Win11-Light, Win11-Dark and Windows-11-cursors are installed"
+    return 0
+  fi
+
+  if [[ -z ${gtk_theme} ]]; then
+    gtk_companions_installed || install_gtk_companions
+    gtk_theme=${target_gtk}
+  fi
+
+  if [[ -z ${cursor_theme} ]]; then
+    cursor_companion_installed || install_cursor_companion
+    cursor_theme=Windows-11-cursors
+  fi
 }
 
 start_restore_script() {
@@ -222,21 +352,21 @@ run_restore() {
 }
 
 install_icons() {
-  local args=(--theme "${accent}" --apply)
+  local args=(--dest "${DATA_DIR}/icons" --theme "${accent}") icon_name=Win11
 
-  case ${mode} in
-    dark) args+=(dark) ;;
-    light) args+=(standard) ;;
-    *) args+=(auto) ;;
-  esac
+  [[ ${accent} == default ]] || icon_name+="-${accent}"
+  [[ ${mode} == dark ]] && icon_name+="-dark"
 
   if [[ ${dry_run} == true ]]; then
     info "  would run: ./install.sh ${args[*]}"
-    return 0
+  else
+    info "Installing the Win11 icon theme (accent: ${accent})..."
+    ( cd "${SRC_DIR}" && ./install.sh "${args[@]}" )
   fi
 
-  info "Installing the Win11 icon theme (accent: ${accent})..."
-  ( cd "${SRC_DIR}" && ./install.sh "${args[@]}" )
+  # Apply through gset rather than install.sh --apply so --restore also puts
+  # back the user's previous icon selection.
+  gset org.cinnamon.desktop.interface icon-theme "'${icon_name}'"
 }
 
 apply_appearance() {
@@ -247,11 +377,11 @@ apply_appearance() {
   if [[ -z ${gtk_theme} ]]; then
     if [[ ${mode} == dark ]]; then
       gtk_theme=$(first_available_theme themes \
-        "Fluent-round-Dark" "Fluent-Dark" "Windows-11-dark" \
+        "Win11-Dark" "Fluent-round-Dark" "Fluent-Dark" "Windows-11-dark" \
         "Mint-Y-Dark-Aqua" "Mint-Y-Dark-Blue" "Mint-Y-Dark" "Adwaita-dark" || true)
     else
       gtk_theme=$(first_available_theme themes \
-        "Fluent-round-Light" "Fluent-Light" "Windows-11" \
+        "Win11-Light" "Win11" "Fluent-round-Light" "Fluent-Light" "Windows-11" \
         "Mint-Y-Aqua" "Mint-Y-Blue" "Mint-Y" "Adwaita" || true)
     fi
   fi
@@ -399,6 +529,23 @@ apply_files_and_desktop() {
   gset org.cinnamon.desktop.notifications display-notifications true
 }
 
+print_theme_summary() {
+  local desktop applications icons pointer
+  desktop=$(gsettings get org.cinnamon.theme name 2>/dev/null || printf 'unknown')
+  applications=$(gsettings get org.cinnamon.desktop.interface gtk-theme 2>/dev/null || printf 'unknown')
+  icons=$(gsettings get org.cinnamon.desktop.interface icon-theme 2>/dev/null || printf 'unknown')
+  pointer=$(gsettings get org.cinnamon.desktop.interface cursor-theme 2>/dev/null || printf 'unknown')
+
+  cat <<EOF
+
+Windows 11 appearance in Cinnamon Themes:
+  Desktop:       ${desktop}
+  Applications:  ${applications}
+  Icons:         ${icons}
+  Mouse Pointer: ${pointer}
+EOF
+}
+
 print_manual_steps() {
   cat <<EOF
 
@@ -422,18 +569,10 @@ applet options per instance, so a script cannot set them safely):
    "Show labels" to off, pinned apps as you like. That gives the
    icon-only, centred Windows 11 taskbar.
 
-4. Optional extras (install, then re-run this script):
-   sudo apt install fonts-open-sans
-   Fluent GTK theme:  https://github.com/vinceliuice/Fluent-gtk-theme
-   Windows 11 cursors: https://github.com/yeyushengfan258/Win11-cursors
-   After installing, run:  $0 --gtk-theme Fluent-round-Dark -m dark
-
-Undo everything from this run:
+Restore the previous desktop settings from this run:
   $0 --restore
 EOF
 }
-
-need_gsettings
 
 while (( $# > 0 )); do
   case $1 in
@@ -476,6 +615,10 @@ while (( $# > 0 )); do
       skip_icons=true
       shift
       ;;
+    --no-companions)
+      install_companions=false
+      shift
+      ;;
     -n|--dry-run)
       dry_run=true
       shift
@@ -501,6 +644,8 @@ while (( $# > 0 )); do
       ;;
   esac
 done
+
+need_gsettings
 
 if [[ ${do_restore} == true ]]; then
   run_restore "${restore_file}"
@@ -544,6 +689,10 @@ fi
 
 start_restore_script
 
+if [[ ${install_companions} == true ]]; then
+  install_companion_themes
+fi
+
 if [[ ${skip_icons} == false ]]; then
   install_icons
 fi
@@ -561,4 +710,5 @@ fi
 
 info "${CHANGES} setting(s) changed. Previous values saved to:"
 info "  ${RESTORE_SCRIPT}"
+print_theme_summary
 print_manual_steps

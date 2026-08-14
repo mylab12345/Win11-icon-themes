@@ -25,14 +25,15 @@ cat > "${WORK_DIR}/bin/gsettings" <<EOF
 DB="${WORK_DIR}/db"
 case \${1:-} in
   list-schemas)
-    printf '%s\n' org.cinnamon org.cinnamon.desktop.interface \\
+    printf '%s\n' org.cinnamon org.cinnamon.theme org.cinnamon.desktop.interface \\
       org.cinnamon.desktop.wm.preferences org.cinnamon.muffin \\
       org.cinnamon.desktop.keybindings org.nemo.preferences org.nemo.desktop
     ;;
   list-keys)
-    printf '%s\n' gtk-theme color-scheme font-name titlebar-font button-layout \\
-      panels-enabled panels-height edge-tiling alttab-switcher-style overlay-key \\
-      default-folder-viewer computer-icon-visible clock-show-date
+    printf '%s\n' name gtk-theme icon-theme cursor-theme cursor-size color-scheme \\
+      font-name titlebar-font theme button-layout panels-enabled panels-height \\
+      edge-tiling alttab-switcher-style overlay-key default-folder-viewer \\
+      computer-icon-visible clock-show-date
     ;;
   get)
     key="\$2.\$3"
@@ -48,6 +49,8 @@ chmod +x "${WORK_DIR}/bin/gsettings"
 
 export PATH="${WORK_DIR}/bin:${PATH}"
 export HOME="${WORK_DIR}"
+export XDG_DATA_HOME="${HOME}/.local/share"
+export XDG_STATE_HOME="${HOME}/.local/state"
 
 bash -n "${SCRIPT}"
 
@@ -74,8 +77,37 @@ if [[ -d ${WORK_DIR}/.local/state/win11-desktop-setup ]]; then
   fail "A dry run created a restore script."
 fi
 
-# A real run applies the expected Windows 11 settings.
-"${SCRIPT}" --no-icons --panel bottom --panel-height 48 -y > /dev/null
+icon_dry_run=$("${SCRIPT}" --no-companions --mode dark --theme purple --dry-run 2>/dev/null)
+if ! grep -Fq "org.cinnamon.desktop.interface icon-theme = 'Win11-purple-dark'" \
+    <<< "${icon_dry_run}"; then
+  fail "The setup did not select the requested dark icon variant."
+fi
+
+# Seed one real selector value so restoration is verified precisely.
+printf "'Mint-Y-Aqua'\n" > \
+  "${WORK_DIR}/db/org.cinnamon.desktop.interface.icon-theme"
+
+# Pretend the pinned companion packages are already installed. This lets the
+# normal path prove all four Cinnamon appearance selectors are used without a
+# network dependency in this part of the test.
+mkdir -p \
+  "${HOME}/.local/share/themes/Win11-Light/gtk-3.0" \
+  "${HOME}/.local/share/themes/Win11-Light/cinnamon" \
+  "${HOME}/.local/share/themes/Win11-Dark/gtk-3.0" \
+  "${HOME}/.local/share/themes/Win11-Dark/cinnamon" \
+  "${HOME}/.local/share/icons/Windows-11-cursors/cursors"
+: > "${HOME}/.local/share/themes/Win11-Light/gtk-3.0/gtk.css"
+: > "${HOME}/.local/share/themes/Win11-Light/cinnamon/cinnamon.css"
+: > "${HOME}/.local/share/themes/Win11-Dark/gtk-3.0/gtk.css"
+: > "${HOME}/.local/share/themes/Win11-Dark/cinnamon/cinnamon.css"
+: > "${HOME}/.local/share/icons/Windows-11-cursors/cursors/default"
+
+# A real run applies the expected Windows 11 settings in all four selectors.
+if ! "${SCRIPT}" --panel bottom --panel-height 48 -y \
+    > "${WORK_DIR}/setup.log" 2>&1; then
+  cat "${WORK_DIR}/setup.log" >&2
+  fail "The full desktop setup returned a non-zero status."
+fi
 
 assert_value() {
   local key=$1 expected=$2 actual
@@ -84,6 +116,11 @@ assert_value() {
     fail "Expected ${key} to be '${expected}', found '${actual}'."
 }
 
+assert_value org.cinnamon.theme.name "'Win11-Light'"
+assert_value org.cinnamon.desktop.interface.gtk-theme "'Win11-Light'"
+assert_value org.cinnamon.desktop.interface.icon-theme "'Win11-blue'"
+assert_value org.cinnamon.desktop.interface.cursor-theme "'Windows-11-cursors'"
+assert_value org.cinnamon.desktop.wm.preferences.theme "'Win11-Light'"
 assert_value org.cinnamon.desktop.wm.preferences.button-layout "':minimize,maximize,close'"
 assert_value org.cinnamon.panels-enabled "['1:0:bottom']"
 assert_value org.cinnamon.panels-height "['1:48']"
@@ -97,8 +134,10 @@ assert_value org.nemo.desktop.computer-icon-visible "true"
 restore=$(ls -1 "${WORK_DIR}/.local/state/win11-desktop-setup"/restore-*.sh)
 [[ -x ${restore} ]] || fail "No executable restore script was created."
 grep -q 'button-layout' "${restore}" || fail "The restore script is missing changed keys."
+grep -q 'icon-theme' "${restore}" || fail "The restore script is missing the icon selector."
 
 "${SCRIPT}" --restore > /dev/null
+assert_value org.cinnamon.desktop.interface.icon-theme "'Mint-Y-Aqua'"
 assert_value org.cinnamon.desktop.wm.preferences.button-layout "'previous'"
 assert_value org.cinnamon.panels-enabled "'previous'"
 
@@ -108,6 +147,61 @@ mkdir -p "${WORK_DIR}/db"
 "${SCRIPT}" --no-icons --panel top --panel-height 40 -y > /dev/null
 assert_value org.cinnamon.panels-enabled "['1:0:top']"
 assert_value org.cinnamon.panels-height "['1:40']"
+
+# Missing companions are fetched at pinned revisions and installed per-user.
+GTK_REPO="${WORK_DIR}/fake-win11-gtk"
+CURSOR_REPO="${WORK_DIR}/fake-win11-cursor"
+COMPANION_HOME="${WORK_DIR}/companion-home"
+mkdir -p "${GTK_REPO}" "${CURSOR_REPO}/Windows-11-cursors/cursors" "${COMPANION_HOME}"
+cat > "${GTK_REPO}/install.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+dest=''
+while (( $# > 0 )); do
+  case $1 in
+    -d|--dest) dest=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ -n ${dest} ]]
+for theme in Win11-Light Win11-Dark; do
+  mkdir -p "${dest}/${theme}/gtk-3.0" "${dest}/${theme}/cinnamon"
+  : > "${dest}/${theme}/gtk-3.0/gtk.css"
+  : > "${dest}/${theme}/cinnamon/cinnamon.css"
+done
+EOF
+chmod +x "${GTK_REPO}/install.sh"
+printf '[Icon Theme]\nName=Windows 11\n' > \
+  "${CURSOR_REPO}/Windows-11-cursors/index.theme"
+: > "${CURSOR_REPO}/Windows-11-cursors/cursors/default"
+
+for repository in "${GTK_REPO}" "${CURSOR_REPO}"; do
+  git -C "${repository}" init -q
+  git -C "${repository}" config user.name test
+  git -C "${repository}" config user.email test@example.invalid
+  git -C "${repository}" add .
+  git -C "${repository}" commit -qm initial
+done
+GTK_REF=$(git -C "${GTK_REPO}" rev-parse HEAD)
+CURSOR_REF=$(git -C "${CURSOR_REPO}" rev-parse HEAD)
+rm -rf "${WORK_DIR}/db" && mkdir -p "${WORK_DIR}/db"
+
+HOME="${COMPANION_HOME}" \
+XDG_DATA_HOME="${COMPANION_HOME}/.local/share" \
+XDG_STATE_HOME="${COMPANION_HOME}/.local/state" \
+WIN11_GTK_REPOSITORY="${GTK_REPO}" WIN11_GTK_REF="${GTK_REF}" \
+WIN11_CURSOR_REPOSITORY="${CURSOR_REPO}" WIN11_CURSOR_REF="${CURSOR_REF}" \
+  "${SCRIPT}" --no-icons -y > /dev/null
+
+[[ -f ${COMPANION_HOME}/.local/share/themes/Win11-Light/gtk-3.0/gtk.css ]] || \
+  fail "The light Win11 application theme was not installed."
+[[ -f ${COMPANION_HOME}/.local/share/themes/Win11-Dark/cinnamon/cinnamon.css ]] || \
+  fail "The dark Win11 desktop theme was not installed."
+[[ -f ${COMPANION_HOME}/.local/share/icons/Windows-11-cursors/cursors/default ]] || \
+  fail "The Windows 11 cursor theme was not installed."
+assert_value org.cinnamon.theme.name "'Win11-Light'"
+assert_value org.cinnamon.desktop.interface.gtk-theme "'Win11-Light'"
+assert_value org.cinnamon.desktop.interface.cursor-theme "'Windows-11-cursors'"
 
 # Regression: a long schema list must still be detected.
 # 'gsettings list-schemas | grep -q' makes gsettings die with SIGPIPE once
@@ -145,7 +239,9 @@ EOF
 chmod +x "${BIG_DIR}/bin/gsettings"
 
 if ! output=$(PATH="${BIG_DIR}/bin:${PATH}" HOME="${BIG_DIR}" \
-      "${SCRIPT}" --no-icons -y 2>&1); then
+      XDG_DATA_HOME="${BIG_DIR}/.local/share" \
+      XDG_STATE_HOME="${BIG_DIR}/.local/state" \
+      "${SCRIPT}" --no-icons --no-companions -y 2>&1); then
   printf '%s\n' "${output}" >&2
   rm -rf "${BIG_DIR}"
   fail "Cinnamon was not detected when many schemas are installed."

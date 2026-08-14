@@ -205,12 +205,12 @@ install_xsi_aliases() {
   local xsi_path xsi_name target_name target count=0
   local -A xsi_names=()
 
-  [[ -d ${xsi_root} ]] || return
+  [[ -d ${xsi_root} ]] || return 0
 
   while IFS= read -r -d '' xsi_path; do
     xsi_names["${xsi_path##*/}"]=1
   done < <(find "${xsi_root}" \( -type f -o -type l \) -name 'xsi-*.svg' -print0)
-  (( ${#xsi_names[@]} > 0 )) || return
+  (( ${#xsi_names[@]} > 0 )) || return 0
 
   # Walk the installed theme once rather than searching it separately for
   # hundreds of XSI names.
