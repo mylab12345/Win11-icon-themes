@@ -75,6 +75,9 @@ runs reuse the installed copies.
 | Applications | Applies the matching `Win11-Light` / `Win11-Dark` GTK theme |
 | Icons | Installs and applies `Win11-blue` / `Win11-blue-dark` via `install.sh` |
 | Mouse Pointer | Installs and applies `Windows-11-cursors` |
+| Font | Installs Microsoft's open **Selawik** font (a Segoe UI-metric twin) when no Segoe-style font is present, and uses it everywhere |
+| Wallpaper | Applies a bundled Windows 11 "Bloom"-style wallpaper matching the light/dark mode (or `--wallpaper FILE` for your own) |
+| Taskbar | Moves the menu and the grouped window list to the **center** of the panel, the signature Windows 11 layout |
 | Titlebars | Uses the matching Win11 window theme, with buttons on the right in `minimize, maximize, close` order |
 | Snapping | Edge tiling, Snap Layouts-style tile HUD, `Super` as snap modifier, new windows centred |
 | Task switcher | Alt+Tab with icons **and** window thumbnails |
@@ -89,7 +92,10 @@ runs reuse the installed copies.
 ```bash
 ./win11-desktop-setup.sh --theme purple --mode dark   # different accent, forced dark
 ./win11-desktop-setup.sh --panel bottom --panel-height 52
+./win11-desktop-setup.sh --wallpaper ~/Pictures/bg.jpg # your own background
 ./win11-desktop-setup.sh --no-icons                   # keep the current icon theme
+./win11-desktop-setup.sh --no-wallpaper --no-font     # keep background and font
+./win11-desktop-setup.sh --no-center-taskbar          # keep the left-aligned panel layout
 ./win11-desktop-setup.sh --no-companions              # stay offline/use installed themes
 ./win11-desktop-setup.sh --dry-run                    # show changes, change nothing
 ./win11-desktop-setup.sh --gtk-theme MyTheme --cursor-theme MyCursors
@@ -106,6 +112,10 @@ immutable revisions, then installed under `${XDG_DATA_HOME:-~/.local/share}`:
 | --- | --- | --- |
 | Desktop and Applications | [`yeyushengfan258/Win11-gtk-theme@49e30de`](https://github.com/yeyushengfan258/Win11-gtk-theme/tree/49e30de3503a49c4c873552b117f8e725393b527) | GPL-3.0 |
 | Mouse Pointer | [`0free/windows-11-icons@408e623`](https://github.com/0free/windows-11-icons/tree/408e6233586d9e79cca252cfc034caf14bf546b8) | Upstream does not declare a license |
+| Font (Selawik) | [`winjs/winstrap@342cf99`](https://github.com/winjs/winstrap/tree/342cf99031344f48917e14a5c3a728ec5ede8d8f) (`src/fonts/selawk*.ttf`) | Selawik is Microsoft's open Segoe UI-compatible font, SIL OFL 1.1 |
+
+The Selawik font is only downloaded when neither Segoe UI nor Selawik is
+already available on the system, and can be skipped with `--no-font`.
 
 The cursor files are **not bundled or redistributed by this repository**. The
 setup script copies them from that pinned upstream snapshot at runtime. Review

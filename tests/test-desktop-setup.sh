@@ -27,13 +27,15 @@ case \${1:-} in
   list-schemas)
     printf '%s\n' org.cinnamon org.cinnamon.theme org.cinnamon.desktop.interface \\
       org.cinnamon.desktop.wm.preferences org.cinnamon.muffin \\
-      org.cinnamon.desktop.keybindings org.nemo.preferences org.nemo.desktop
+      org.cinnamon.desktop.keybindings org.nemo.preferences org.nemo.desktop \\
+      org.cinnamon.desktop.background
     ;;
   list-keys)
     printf '%s\n' name gtk-theme icon-theme cursor-theme cursor-size color-scheme \\
       font-name titlebar-font theme button-layout panels-enabled panels-height \\
       edge-tiling alttab-switcher-style overlay-key default-folder-viewer \\
-      computer-icon-visible clock-show-date
+      computer-icon-visible clock-show-date enabled-applets \\
+      picture-uri picture-options
     ;;
   get)
     key="\$2.\$3"
@@ -87,6 +89,10 @@ fi
 printf "'Mint-Y-Aqua'\n" > \
   "${WORK_DIR}/db/org.cinnamon.desktop.interface.icon-theme"
 
+# Seed a Mint-like default applet layout: menu and window list on the left.
+printf "%s\n" "['panel1:left:0:menu@cinnamon.org:0', 'panel1:left:1:grouped-window-list@cinnamon.org:1', 'panel1:right:0:systray@cinnamon.org:2', 'panel1:right:1:calendar@cinnamon.org:3']" > \
+  "${WORK_DIR}/db/org.cinnamon.enabled-applets"
+
 # Pretend the pinned companion packages are already installed. This lets the
 # normal path prove all four Cinnamon appearance selectors are used without a
 # network dependency in this part of the test.
@@ -101,6 +107,8 @@ mkdir -p \
 : > "${HOME}/.local/share/themes/Win11-Dark/gtk-3.0/gtk.css"
 : > "${HOME}/.local/share/themes/Win11-Dark/cinnamon/cinnamon.css"
 : > "${HOME}/.local/share/icons/Windows-11-cursors/cursors/default"
+mkdir -p "${HOME}/.local/share/fonts/selawik"
+: > "${HOME}/.local/share/fonts/selawik/selawk.ttf"
 
 # A real run applies the expected Windows 11 settings in all four selectors.
 if ! "${SCRIPT}" --panel bottom --panel-height 48 -y \
@@ -130,6 +138,17 @@ assert_value org.cinnamon.desktop.keybindings.overlay-key "'Super_L'"
 assert_value org.nemo.preferences.default-folder-viewer "'list-view'"
 assert_value org.nemo.desktop.computer-icon-visible "true"
 
+# The menu and window list moved to the center zone; right applets stayed.
+assert_value org.cinnamon.enabled-applets \
+  "['panel1:center:0:menu@cinnamon.org:0', 'panel1:center:1:grouped-window-list@cinnamon.org:1', 'panel1:right:0:systray@cinnamon.org:2', 'panel1:right:1:calendar@cinnamon.org:3']"
+
+# The bundled light wallpaper was copied out of the repo and applied.
+wallpaper_target="${XDG_DATA_HOME}/backgrounds/win11/win11-bloom-light.jpg"
+[[ -f ${wallpaper_target} ]] || fail "The bundled wallpaper was not copied."
+assert_value org.cinnamon.desktop.background.picture-uri \
+  "'file://${wallpaper_target}'"
+assert_value org.cinnamon.desktop.background.picture-options "'zoom'"
+
 # The restore script records the previous values and can undo the run.
 restore=$(ls -1 "${WORK_DIR}/.local/state/win11-desktop-setup"/restore-*.sh)
 [[ -x ${restore} ]] || fail "No executable restore script was created."
@@ -148,11 +167,38 @@ mkdir -p "${WORK_DIR}/db"
 assert_value org.cinnamon.panels-enabled "['1:0:top']"
 assert_value org.cinnamon.panels-height "['1:40']"
 
+# Opt-outs: no wallpaper, no taskbar change; a custom wallpaper is honoured.
+rm -rf "${WORK_DIR}/db" "${WORK_DIR}/.local/state" \
+  "${XDG_DATA_HOME}/backgrounds"
+mkdir -p "${WORK_DIR}/db"
+printf "%s\n" "['panel1:left:0:menu@cinnamon.org:0']" > \
+  "${WORK_DIR}/db/org.cinnamon.enabled-applets"
+"${SCRIPT}" --no-icons --no-wallpaper --no-center-taskbar -y > /dev/null
+assert_value org.cinnamon.enabled-applets "['panel1:left:0:menu@cinnamon.org:0']"
+[[ ! -f ${WORK_DIR}/db/org.cinnamon.desktop.background.picture-uri ]] || \
+  fail "--no-wallpaper still changed the background."
+
+custom_paper="${WORK_DIR}/my-paper.jpg"
+: > "${custom_paper}"
+rm -rf "${WORK_DIR}/db" "${WORK_DIR}/.local/state"
+mkdir -p "${WORK_DIR}/db"
+"${SCRIPT}" --no-icons --wallpaper "${custom_paper}" -y > /dev/null
+assert_value org.cinnamon.desktop.background.picture-uri \
+  "'file://${custom_paper}'"
+
+# An already-centered layout is left untouched (idempotent).
+printf "%s\n" "['panel1:center:0:menu@cinnamon.org:0']" > \
+  "${WORK_DIR}/db/org.cinnamon.enabled-applets"
+"${SCRIPT}" --no-icons -y > /dev/null
+assert_value org.cinnamon.enabled-applets "['panel1:center:0:menu@cinnamon.org:0']"
+
 # Missing companions are fetched at pinned revisions and installed per-user.
 GTK_REPO="${WORK_DIR}/fake-win11-gtk"
 CURSOR_REPO="${WORK_DIR}/fake-win11-cursor"
+FONT_REPO="${WORK_DIR}/fake-win11-font"
 COMPANION_HOME="${WORK_DIR}/companion-home"
-mkdir -p "${GTK_REPO}" "${CURSOR_REPO}/Windows-11-cursors/cursors" "${COMPANION_HOME}"
+mkdir -p "${GTK_REPO}" "${CURSOR_REPO}/Windows-11-cursors/cursors" \
+  "${FONT_REPO}/src/fonts" "${COMPANION_HOME}"
 cat > "${GTK_REPO}/install.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -174,8 +220,11 @@ chmod +x "${GTK_REPO}/install.sh"
 printf '[Icon Theme]\nName=Windows 11\n' > \
   "${CURSOR_REPO}/Windows-11-cursors/index.theme"
 : > "${CURSOR_REPO}/Windows-11-cursors/cursors/default"
+: > "${FONT_REPO}/src/fonts/selawk.ttf"
+: > "${FONT_REPO}/src/fonts/selawkb.ttf"
+: > "${FONT_REPO}/src/fonts/selawksb.ttf"
 
-for repository in "${GTK_REPO}" "${CURSOR_REPO}"; do
+for repository in "${GTK_REPO}" "${CURSOR_REPO}" "${FONT_REPO}"; do
   git -C "${repository}" init -q
   git -C "${repository}" config user.name test
   git -C "${repository}" config user.email test@example.invalid
@@ -184,6 +233,7 @@ for repository in "${GTK_REPO}" "${CURSOR_REPO}"; do
 done
 GTK_REF=$(git -C "${GTK_REPO}" rev-parse HEAD)
 CURSOR_REF=$(git -C "${CURSOR_REPO}" rev-parse HEAD)
+FONT_REF=$(git -C "${FONT_REPO}" rev-parse HEAD)
 rm -rf "${WORK_DIR}/db" && mkdir -p "${WORK_DIR}/db"
 
 HOME="${COMPANION_HOME}" \
@@ -191,6 +241,7 @@ XDG_DATA_HOME="${COMPANION_HOME}/.local/share" \
 XDG_STATE_HOME="${COMPANION_HOME}/.local/state" \
 WIN11_GTK_REPOSITORY="${GTK_REPO}" WIN11_GTK_REF="${GTK_REF}" \
 WIN11_CURSOR_REPOSITORY="${CURSOR_REPO}" WIN11_CURSOR_REF="${CURSOR_REF}" \
+WIN11_FONT_REPOSITORY="${FONT_REPO}" WIN11_FONT_REF="${FONT_REF}" \
   "${SCRIPT}" --no-icons -y > /dev/null
 
 [[ -f ${COMPANION_HOME}/.local/share/themes/Win11-Light/gtk-3.0/gtk.css ]] || \
@@ -199,6 +250,12 @@ WIN11_CURSOR_REPOSITORY="${CURSOR_REPO}" WIN11_CURSOR_REF="${CURSOR_REF}" \
   fail "The dark Win11 desktop theme was not installed."
 [[ -f ${COMPANION_HOME}/.local/share/icons/Windows-11-cursors/cursors/default ]] || \
   fail "The Windows 11 cursor theme was not installed."
+if command -v fc-list >/dev/null 2>&1 && fc-list 2>/dev/null | grep -qiE "segoe ui|selawik"; then
+  : # a Segoe-like font is already on this machine, so no download is expected
+else
+  [[ -f ${COMPANION_HOME}/.local/share/fonts/selawik/selawk.ttf ]] || \
+    fail "The Selawik font was not installed."
+fi
 assert_value org.cinnamon.theme.name "'Win11-Light'"
 assert_value org.cinnamon.desktop.interface.gtk-theme "'Win11-Light'"
 assert_value org.cinnamon.desktop.interface.cursor-theme "'Windows-11-cursors'"
