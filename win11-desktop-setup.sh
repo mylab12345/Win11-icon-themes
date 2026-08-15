@@ -23,6 +23,10 @@ WIN11_GTK_REPOSITORY=${WIN11_GTK_REPOSITORY:-https://github.com/yeyushengfan258/
 WIN11_GTK_REF=${WIN11_GTK_REF:-49e30de3503a49c4c873552b117f8e725393b527}
 WIN11_CURSOR_REPOSITORY=${WIN11_CURSOR_REPOSITORY:-https://github.com/0free/windows-11-icons.git}
 WIN11_CURSOR_REF=${WIN11_CURSOR_REF:-408e6233586d9e79cca252cfc034caf14bf546b8}
+# Selawik is Microsoft's open (OFL) metrics-compatible Segoe UI replacement.
+# The winstrap repository ships the compiled TTF files.
+WIN11_FONT_REPOSITORY=${WIN11_FONT_REPOSITORY:-https://github.com/winjs/winstrap.git}
+WIN11_FONT_REF=${WIN11_FONT_REF:-342cf99031344f48917e14a5c3a728ec5ede8d8f}
 
 accent=blue
 mode=auto
@@ -32,6 +36,10 @@ gtk_theme=""
 cursor_theme=""
 font_name=""
 skip_icons=false
+skip_font=false
+skip_wallpaper=false
+skip_taskbar=false
+wallpaper_file=""
 install_companions=true
 dry_run=false
 restore_file=""
@@ -65,8 +73,12 @@ Options:
       --gtk-theme NAME    Override the GTK/Cinnamon theme
       --cursor-theme NAME Override the cursor theme
       --font NAME         Override the interface font (e.g. "Ubuntu 10")
+      --wallpaper FILE    Use a custom wallpaper instead of the bundled one
       --no-icons          Do not install or change the icon theme
-      --no-companions     Do not download Win11 application/desktop/cursor themes
+      --no-font           Do not download the Selawik (Segoe UI-style) font
+      --no-wallpaper      Do not change the desktop background
+      --no-center-taskbar Do not center the menu and window list on the panel
+      --no-companions     Do not download Win11 themes, cursors or fonts
   -n, --dry-run           Print what would change, change nothing
   -y, --yes               Do not ask for confirmation
       --restore [FILE]    Undo a previous run (default: the most recent one)
@@ -76,6 +88,8 @@ Examples:
   $0                       # blue accent, follows the current light/dark mode
   $0 --theme purple -m dark
   $0 --panel bottom --panel-height 52 -y
+  $0 --wallpaper ~/Pictures/my-background.jpg
+  $0 --no-wallpaper --no-font
   $0 --restore
 EOF
 }
@@ -205,6 +219,18 @@ cursor_companion_installed() {
      -f ${DATA_DIR}/icons/Windows-11-cursors/cursors/left_ptr ]]
 }
 
+font_companion_installed() {
+  [[ -f ${DATA_DIR}/fonts/selawik/selawk.ttf ]]
+}
+
+# A Segoe UI-compatible font is already usable when Segoe UI itself or an
+# installed Selawik is visible to fontconfig.
+segoe_like_font_available() {
+  local fonts
+  fonts=$(fc-list 2>/dev/null || true)
+  grep -qiE "segoe ui|selawik" <<< "${fonts}"
+}
+
 install_gtk_companions() {
   local checkout
   ensure_companion_work_dir
@@ -250,6 +276,33 @@ install_cursor_companion() {
     error "The Windows 11 cursor theme could not be installed."
 }
 
+install_font_companion() {
+  local checkout source target file installed=0
+  ensure_companion_work_dir
+  checkout="${COMPANION_WORK_DIR}/font"
+  source="${checkout}/src/fonts"
+  target="${DATA_DIR}/fonts/selawik"
+
+  info "Downloading the Selawik font (Segoe UI-style interface font)..."
+  fetch_companion_repo "Selawik font" \
+    "${WIN11_FONT_REPOSITORY}" "${WIN11_FONT_REF}" "${checkout}"
+  [[ -f ${source}/selawk.ttf ]] || \
+    error "The Selawik font download does not contain selawk.ttf."
+
+  mkdir -p "${target}"
+  for file in "${source}"/selawk*.ttf; do
+    [[ -f ${file} ]] || continue
+    cp -f "${file}" "${target}/"
+    installed=$((installed + 1))
+  done
+  (( installed > 0 )) || error "No Selawik font files could be installed."
+
+  if command -v fc-cache >/dev/null 2>&1; then
+    fc-cache -f "${target}" >/dev/null 2>&1 || true
+  fi
+  info "  installed ${installed} Selawik font file(s) to ${target}"
+}
+
 # Ensure Cinnamon has real Windows 11 choices for Applications, Desktop and
 # Mouse Pointer. Icons are supplied by this repository in install_icons().
 install_companion_themes() {
@@ -260,6 +313,9 @@ install_companion_themes() {
     [[ -n ${gtk_theme} ]] || gtk_theme=${target_gtk}
     [[ -n ${cursor_theme} ]] || cursor_theme=Windows-11-cursors
     info "  would ensure Win11-Light, Win11-Dark and Windows-11-cursors are installed"
+    if [[ ${skip_font} == false && -z ${font_name} ]] && ! segoe_like_font_available; then
+      info "  would install the Selawik font to ${DATA_DIR}/fonts/selawik"
+    fi
     return 0
   fi
 
@@ -271,6 +327,14 @@ install_companion_themes() {
   if [[ -z ${cursor_theme} ]]; then
     cursor_companion_installed || install_cursor_companion
     cursor_theme=Windows-11-cursors
+  fi
+
+  # A Segoe UI-style font is only fetched when nothing suitable is installed
+  # and the user has not chosen a font explicitly.
+  if [[ ${skip_font} == false && -z ${font_name} ]]; then
+    if ! segoe_like_font_available && ! font_companion_installed; then
+      install_font_companion
+    fi
   fi
 }
 
@@ -417,7 +481,7 @@ apply_appearance() {
     fonts=$(fc-list 2>/dev/null || true)
     if grep -qi "segoe ui" <<< "${fonts}"; then
       font_name="Segoe UI 10"
-    elif grep -qi "selawik" <<< "${fonts}"; then
+    elif grep -qi "selawik" <<< "${fonts}" || font_companion_installed; then
       font_name="Selawik 10"
     else
       font_name="Ubuntu 10"
@@ -496,6 +560,103 @@ apply_panel() {
     "['expo:false:0', 'scale:false:0', 'scale:false:0', 'desktop:false:0']"
 }
 
+# Center the menu and the grouped window list on the panel -- the single most
+# recognisable Windows 11 taskbar trait. Existing center/right applets are
+# kept; only left-zone instances of the menu and the window list move.
+apply_centered_taskbar() {
+  local current updated
+
+  [[ ${skip_taskbar} == false ]] || return 0
+  schema_exists org.cinnamon || return 0
+  key_exists org.cinnamon enabled-applets || return 0
+
+  info "Taskbar layout"
+
+  current=$(gsettings get org.cinnamon enabled-applets 2>/dev/null || true)
+  # Only proceed on a list value; anything else means the key is unavailable.
+  [[ ${current} == \[* ]] || return 0
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    warn "python3 is not available; the taskbar was not centered."
+    return 0
+  fi
+
+  # 'panelN:left:POS:APPLET@ID:INSTANCE' -> same entry in the center zone.
+  local status=0
+  updated=$(python3 - "$current" 2>/dev/null <<'PYEOF'
+import ast, sys
+try:
+    applets = ast.literal_eval(sys.argv[1])
+    assert isinstance(applets, list)
+except Exception:
+    sys.exit(1)
+moved = ("menu@cinnamon.org", "grouped-window-list@cinnamon.org",
+         "window-list@cinnamon.org")
+out = []
+changed = False
+for entry in applets:
+    parts = str(entry).split(":")
+    if len(parts) >= 4 and parts[1] == "left" and parts[3] in moved:
+        parts[1] = "center"
+        changed = True
+    out.append(":".join(parts))
+if not changed:
+    sys.exit(2)
+print("[" + ", ".join("'" + e + "'" for e in out) + "]")
+PYEOF
+) || status=$?
+  case ${status} in
+    0) ;;
+    2) info "  the menu and window list are already centered"; return 0 ;;
+    *) warn "Could not parse the applet layout; leaving the taskbar as it is."
+       return 0 ;;
+  esac
+
+  [[ -n ${updated} ]] || return 0
+  gset org.cinnamon enabled-applets "${updated}"
+}
+
+# Windows 11-style "Bloom" wallpaper matching the light/dark mode.
+apply_wallpaper() {
+  local source target file_uri
+
+  [[ ${skip_wallpaper} == false ]] || return 0
+  schema_exists org.cinnamon.desktop.background || return 0
+
+  info "Wallpaper"
+
+  if [[ -n ${wallpaper_file} ]]; then
+    source=${wallpaper_file}
+  elif [[ ${mode} == dark ]]; then
+    source="${SRC_DIR}/wallpapers/win11-bloom-dark.jpg"
+  else
+    source="${SRC_DIR}/wallpapers/win11-bloom-light.jpg"
+  fi
+
+  if [[ ! -f ${source} ]]; then
+    warn "Wallpaper '${source}' was not found; keeping the current background."
+    return 0
+  fi
+
+  # Copy into the user's backgrounds directory so the setting survives even
+  # if this repository checkout is deleted later.
+  if [[ ${source} == "${SRC_DIR}"/wallpapers/* ]]; then
+    target="${DATA_DIR}/backgrounds/win11/$(basename "${source}")"
+    if [[ ${dry_run} == true ]]; then
+      info "  would copy $(basename "${source}") to ${target}"
+    else
+      mkdir -p "$(dirname "${target}")"
+      cp -f "${source}" "${target}"
+    fi
+  else
+    target=${source}
+  fi
+
+  file_uri="file://${target}"
+  gset org.cinnamon.desktop.background picture-uri "'${file_uri}'"
+  gset org.cinnamon.desktop.background picture-options "'zoom'"
+}
+
 apply_files_and_desktop() {
   info "Files and desktop"
 
@@ -552,22 +713,19 @@ print_manual_steps() {
 Applied. A few finishing touches still need the GUI (Cinnamon stores
 applet options per instance, so a script cannot set them safely):
 
-1. Centred taskbar (the most Windows 11 detail)
-   Right-click the panel -> Panel -> Panel edit mode.
-   Drag "Menu" and "Grouped window list" into the CENTER zone,
-   keep the systray, clock and notifications on the right.
-   Turn Panel edit mode off again.
-
-2. Start menu
+1. Start menu
    Right-click the menu button -> Configure:
    - hide the menu label ("Menu" text)
    - use a Windows-style icon if you prefer
    - enable "Use a categories-less layout" for a Win11 feel.
 
-3. Window list
+2. Window list
    Right-click "Grouped window list" -> Configure -> set
    "Show labels" to off, pinned apps as you like. That gives the
    icon-only, centred Windows 11 taskbar.
+
+If the panel or wallpaper looks stale, restart Cinnamon with
+Ctrl+Alt+Esc (or log out and back in).
 
 Restore the previous desktop settings from this run:
   $0 --restore
@@ -611,8 +769,25 @@ while (( $# > 0 )); do
       font_name=$2
       shift 2
       ;;
+    --wallpaper)
+      [[ -n ${2:-} ]] || error "--wallpaper requires a file path."
+      wallpaper_file=$2
+      shift 2
+      ;;
     --no-icons)
       skip_icons=true
+      shift
+      ;;
+    --no-font)
+      skip_font=true
+      shift
+      ;;
+    --no-wallpaper)
+      skip_wallpaper=true
+      shift
+      ;;
+    --no-center-taskbar)
+      skip_taskbar=true
       shift
       ;;
     --no-companions)
@@ -700,6 +875,8 @@ fi
 apply_appearance
 apply_window_management
 apply_panel
+apply_centered_taskbar
+apply_wallpaper
 apply_files_and_desktop
 
 info ""
